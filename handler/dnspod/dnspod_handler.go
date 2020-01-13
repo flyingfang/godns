@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/TimothyYe/godns"
-	simplejson "github.com/bitly/go-simplejson"
+	"github.com/bitly/go-simplejson"
 )
 
 // Handler struct definition
@@ -118,25 +118,43 @@ func (handler *Handler) GetDomain(name string) int64 {
 	var ret int64
 	values := url.Values{}
 	values.Add("type", "all")
-	values.Add("offset", "0")
-	values.Add("length", "20")
+	page := 1
+	size := 20
+	var total int64
+L:
+	for {
+		if total != 0 && (int64((page-1)*size) >= total) {
+			log.Fatal("Failed to find domain")
+			return -1
+		}
+		values.Add("offset", strconv.Itoa(page-1))
+		values.Add("length", strconv.Itoa(size))
 
-	response, err := handler.PostData("/Domain.List", values)
+		response, err := handler.PostData("/Domain.List", values)
 
-	if err != nil {
-		log.Println("Failed to get domain list...")
-		return -1
-	}
+		if err != nil {
+			log.Fatal("Failed to get domain list...")
+			return -1
+		}
 
-	sjson, parseErr := simplejson.NewJson([]byte(response))
+		sjson, parseErr := simplejson.NewJson([]byte(response))
 
-	if parseErr != nil {
-		log.Println(parseErr)
-		return -1
-	}
+		if parseErr != nil {
+			log.Fatal(parseErr)
+			return -1
+		}
 
-	if sjson.Get("status").Get("code").MustString() == "1" {
+		if sjson.Get("status").Get("code").MustString() != "1" {
+			log.Fatal("get_domain:status code:", sjson.Get("status").Get("code").MustString())
+		}
+
+		total = sjson.Get("info").Get("domain_total").MustInt64()
 		domains, _ := sjson.Get("domains").Array()
+
+		if len(domains) == 0 {
+			log.Fatal("domains slice is empty.")
+			return -1
+		}
 
 		for _, d := range domains {
 			m := d.(map[string]interface{})
@@ -146,19 +164,18 @@ func (handler *Handler) GetDomain(name string) int64 {
 				switch t := id.(type) {
 				case json.Number:
 					ret, _ = t.Int64()
+					return ret
+				default:
+					log.Fatal("domain id is invalid")
 				}
 
-				break
+				break L
 			}
 		}
-		if len(domains) == 0 {
-			log.Println("domains slice is empty.")
-		}
-	} else {
-		log.Println("get_domain:status code:", sjson.Get("status").Get("code").MustString())
+		page++
 	}
 
-	return ret
+	return -1
 }
 
 // GetSubDomain returns subdomain by domain id
@@ -212,11 +229,10 @@ func (handler *Handler) UpdateIP(domainID int64, subDomainID string, subDomainNa
 	value.Add("domain_id", strconv.FormatInt(domainID, 10))
 	value.Add("record_id", subDomainID)
 	value.Add("sub_domain", subDomainName)
-	value.Add("record_type", "A")
 	value.Add("record_line", "默认")
 	value.Add("value", ip)
 
-	response, err := handler.PostData("/Record.Modify", value)
+	response, err := handler.PostData("/Record.Ddns", value)
 
 	if err != nil {
 		log.Println("Failed to update record to new IP!")
